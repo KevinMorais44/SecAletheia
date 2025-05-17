@@ -1,0 +1,182 @@
+
+import subprocess
+import tkinter as tk
+from tkinter import scrolledtext, messagebox, simpledialog
+import threading
+import requests
+import json
+
+stop_threads = False
+report_content = []
+
+def show_legal_notice():
+    legal_notice_window = tk.Toplevel()
+    legal_notice_window.title("Legal Notice")
+    legal_notice_window.geometry("750x400")
+
+    legal_text = """This tool integrates open-source penetration testing tools under various licenses (e.g., GPL, MIT, BSD).
+Please ensure that you comply with the licenses of each tool you use.
+
+- Nmap: Open Source License (https://nmap.org/book/man-legal.html)
+- SQLMap: GPLv3 (https://github.com/sqlmapproject/sqlmap/blob/master/COPYING)
+- Hydra: GPLv3 (https://github.com/vanhauser-thc/thc-hydra/blob/master/COPYING)
+- Burp Suite: Proprietary (https://portswigger.net/burp/license-agreement)
+- Gobuster: MIT License (https://github.com/OJ/gobuster/blob/master/LICENSE)
+- Nikto: GPLv2 (https://github.com/sullo/nikto/blob/master/LICENSE)
+- Metasploit: BSD License (https://opensource.org/licenses/BSD-3-Clause)
+- WhatWeb: GPLv3 (https://github.com/urbanadventurer/WhatWeb/blob/master/LICENSE)
+
+By using this tool, you agree to abide by all applicable laws and regulations related to penetration testing and cybersecurity.
+
+The developer is not responsible for any illegal use of this tool.
+"""
+    text_widget = scrolledtext.ScrolledText(legal_notice_window, wrap=tk.WORD)
+    text_widget.pack(expand=True, fill=tk.BOTH)
+    text_widget.insert(tk.END, legal_text)
+    text_widget.config(state=tk.DISABLED)
+    tk.Button(legal_notice_window, text="Close", command=legal_notice_window.destroy).pack(pady=10)
+
+def run_command(command, output):
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True, text=True)
+        while True:
+            if stop_threads:
+                process.terminate()
+                break
+            line = process.stdout.readline()
+            if not line:
+                break
+            output.insert(tk.END, line)
+            output.see(tk.END)
+            report_content.append(line)
+        error = process.stderr.read()
+        if error:
+            output.insert(tk.END, error)
+            report_content.append(error)
+    except Exception as e:
+        output.insert(tk.END, f"Error: {e}\n")
+        report_content.append(f"Error: {e}\n")
+
+def scan_ports_and_services(target, output):
+    output.insert(tk.END, f"Scanning services on {target} with Nmap...\n")
+    report_content.append(f"Scanning services on {target} with Nmap...\n")
+    command = f"nmap -p- -T4 -sV {target}"
+    run_command(command, output)
+
+def run_web_enum(target, output):
+    output.insert(tk.END, "Running Nikto and WhatWeb...\n")
+    run_command(f"nikto -h http://{target}", output)
+    run_command(f"whatweb http://{target}", output)
+
+def run_exploitation(target, output):
+    output.insert(tk.END, "Running Metasploit module (example)...\n")
+    command = f"msfconsole -q -x \"use exploit/unix/ftp/vsftpd_234_backdoor; set RHOST {target}; run;\""
+    run_command(command, output)
+
+def perform_scan(target, output, mode):
+    global stop_threads
+    stop_threads = False
+    output.delete(1.0, tk.END)
+    report_content.clear()
+    output.insert(tk.END, f"Starting {mode} mode on target: {target}\n\n")
+
+    scan_ports_and_services(target, output)
+
+    if mode in ["Scan", "Exploit", "Intrusion"]:
+        output.insert(tk.END, "Running adaptive enumeration based on service detection...\n")
+        run_web_enum(target, output)
+
+    if mode in ["Exploit", "Intrusion"]:
+        run_exploitation(target, output)
+
+    output.insert(tk.END, f"{mode} operation completed.\n")
+
+def start_scan(target, output, mode):
+    thread = threading.Thread(target=perform_scan, args=(target, output, mode))
+    thread.start()
+
+def save_report_json():
+    data = {"report": report_content}
+    with open("pentest_report.json", "w") as f:
+        json.dump(data, f, indent=4)
+    messagebox.showinfo("Saved", "Report saved as pentest_report.json")
+
+def save_report_txt():
+    with open("pentest_report.txt", "w") as f:
+        f.writelines(report_content)
+    messagebox.showinfo("Saved", "Report saved as pentest_report.txt")
+
+def generate_ai_summary(output):
+    try:
+        api_key = simpledialog.askstring("API Key", "Enter your OpenAI API Key:")
+        if not api_key:
+            messagebox.showerror("Error", "API Key is required.")
+            return
+        output.insert(tk.END, "\nGenerating summary using OpenAI...\n")
+        prompt = "Generate a professional and concise cybersecurity report summary based on the following content:\n\n" + "".join(str(line) for line in report_content)
+
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 800,
+            "temperature": 0.7
+        }
+
+        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data)
+
+        if response.status_code == 200:
+            summary = response.json()["choices"][0]["message"]["content"]
+            show_summary_window(summary)
+        else:
+            output.insert(tk.END, f"OpenAI Error: {response.status_code} - {response.text}\n")
+
+    except Exception as e:
+        output.insert(tk.END, f"Exception: {str(e)}\n")
+
+def show_summary_window(summary):
+    summary_window = tk.Toplevel()
+    summary_window.title("AI Summary")
+    summary_window.geometry("600x400")
+    text_widget = scrolledtext.ScrolledText(summary_window, wrap=tk.WORD)
+    text_widget.pack(expand=True, fill=tk.BOTH)
+    text_widget.insert(tk.END, summary)
+    text_widget.config(state=tk.DISABLED)
+
+def create_gui():
+    root = tk.Tk()
+    root.title("SecAletheia Autonomous Pentest Tool")
+    root.geometry("730x750")
+    root.resizable(False, False)
+
+    output = scrolledtext.ScrolledText(root, height=20, width=80)
+    output.grid(row=0, column=0, padx=10, pady=10, columnspan=2)
+
+    tk.Label(root, text="Target (IP or Domain):").grid(row=1, column=0, sticky="w", padx=10)
+    target_entry = tk.Entry(root, width=50)
+    target_entry.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+
+    def create_action_button(label, mode, row):
+        tk.Button(root, text=label, width=30, command=lambda: start_scan(target_entry.get(), output, mode)).grid(row=row, column=0, columnspan=2, pady=5)
+
+    create_action_button("Scan", "Scan", 2)
+    create_action_button("Exploit", "Exploit", 3)
+    create_action_button("Intrusion", "Intrusion", 4)
+
+    tk.Button(root, text="Save Report as JSON", width=30, command=save_report_json).grid(row=5, column=0, padx=10, pady=5)
+    tk.Button(root, text="Save Report as TXT", width=30, command=save_report_txt).grid(row=5, column=1, padx=10, pady=5)
+
+    tk.Button(root, text="Generate AI Summary", command=lambda: generate_ai_summary(output), bg="#d4edda").grid(row=6, column=0, columnspan=2, pady=10)
+    tk.Button(root, text="View Legal Notice", command=show_legal_notice).grid(row=7, column=0, columnspan=2, pady=5)
+
+    tk.Label(root, text="Note: AI Summary requires internet and your OpenAI API key.", fg="red").grid(row=8, column=0, columnspan=2, pady=5)
+
+    root.mainloop()
+
+if __name__ == "__main__":
+    create_gui()
